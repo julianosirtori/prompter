@@ -151,6 +151,16 @@ export class Prompter {
     this.goTo(Math.max(0, this.itemIndex - 1));
   }
 
+  /**
+   * Jumps to the first chunk of a block (script index). Blocks jumped over get no mark, so a
+   * rehearsal that skips ahead never reports zero-length blocks.
+   */
+  jumpToBlock(blockIndex: number): void {
+    if (this.phase !== 'running') return;
+    const index = this.timeline.items.findIndex((item) => item.blockIndex === blockIndex);
+    if (index !== -1) this.goTo(index);
+  }
+
   /** Freezes the current chunk while held (timed mode, while running). */
   setHolding(holding: boolean): void {
     if (this.holding === holding || this.mode !== 'timed') return;
