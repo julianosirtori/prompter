@@ -46,21 +46,59 @@ export const parseHash = (hash: string): Route => {
   return { name: 'review', scriptId };
 };
 
+/** Kept in `history.state`: the hash of the entry right below this one, when the app pushed it. */
+interface EntryState {
+  prev?: string;
+}
+
+const currentHash = (): string => window.location.hash || '#/';
+
+const previousHash = (): string | undefined => (window.history.state as EntryState | null)?.prev;
+
+const listeners = new Set<() => void>();
+
 const subscribe = (listener: () => void): (() => void) => {
+  listeners.add(listener);
+  window.addEventListener('popstate', listener);
   window.addEventListener('hashchange', listener);
-  return () => window.removeEventListener('hashchange', listener);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener('popstate', listener);
+    window.removeEventListener('hashchange', listener);
+  };
 };
 
-const getHash = (): string => window.location.hash;
-
 export const useRoute = (): Route => {
-  const hash = useSyncExternalStore(subscribe, getHash);
+  const hash = useSyncExternalStore(subscribe, currentHash);
   return useMemo(() => parseHash(hash), [hash]);
 };
 
-/** `replace` keeps the back button from returning to a finished session. */
+/**
+ * Goes to a route. A push remembers where it came from, so `goBack` can tell whether the
+ * browser's own back would land on the right screen. `replace` swaps the current entry (a
+ * finished session must not be reachable with back) and keeps that memory.
+ */
 export const navigate = (route: Route, options: { replace?: boolean } = {}): void => {
   const hash = routeToHash(route);
-  if (options.replace) window.location.replace(hash);
-  else window.location.hash = hash;
+  const here = currentHash();
+  if (options.replace) {
+    window.history.replaceState({ prev: previousHash() } satisfies EntryState, '', hash);
+  } else {
+    if (hash === here) return;
+    window.history.pushState({ prev: here } satisfies EntryState, '', hash);
+  }
+  listeners.forEach((listener) => listener());
+};
+
+/**
+ * "Voltar" inside the app. When the entry below is the destination, pops the history like the
+ * browser button would; otherwise (deep link, reload, came from somewhere else) replaces the
+ * current entry so the stack never grows by going back. `alsoAccept` names other screens that
+ * are fine to return to (a session opened from the takes screen goes back to it).
+ */
+export const goBack = (fallback: Route, alsoAccept?: (previous: Route) => boolean): void => {
+  const previous = previousHash();
+  const accepted = previous !== undefined && (previous === routeToHash(fallback) || alsoAccept?.(parseHash(previous)) === true);
+  if (accepted) window.history.back();
+  else navigate(fallback, { replace: true });
 };

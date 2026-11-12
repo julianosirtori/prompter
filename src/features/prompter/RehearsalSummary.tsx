@@ -1,7 +1,7 @@
 import { preciseSeconds, rehearsalVerdict } from '../../app/copy';
 import { reviewFlashKey, setFlash } from '../../app/flash';
-import { navigate } from '../../app/router';
-import { measuredDurations } from '../../app/sessionAdapters';
+import { goBack, navigate } from '../../app/router';
+import { measuredDurations, spokenMarks } from '../../app/sessionAdapters';
 import { applyDurations, totalDuration } from '../../domain/script';
 import { blockPaces } from '../../domain/take';
 import { formatSeconds } from '../../domain/time';
@@ -22,11 +22,12 @@ interface RehearsalSummaryProps {
 
 /** End of a rehearsal: "Seu tempo × roteiro" per block and what to do with it. */
 export function RehearsalSummary({ script, range, marks, measured, incomplete, onAgain, onSaveScript }: RehearsalSummaryProps) {
-  const paces = blockPaces(script.blocks, marks);
+  // Blocks that were only passed through (skipped with 1–9) are not a measure of anything.
+  const paces = blockPaces(script.blocks, spokenMarks(marks));
   const coveredAll = !incomplete && paces.length === range.to - range.from + 1;
   const canUseTimes = coveredAll && (measured || paces.some((pace) => pace.offPace));
   const stoppedAt = marks.find((mark) => mark.interrupted) ?? marks.at(-1);
-  const toReview = () => navigate({ name: 'review', scriptId: script.id }, { replace: true });
+  const toReview = () => goBack({ name: 'review', scriptId: script.id });
 
   const useMyTimes = () => {
     const next = applyDurations(script, measuredDurations(script.blocks, paces));

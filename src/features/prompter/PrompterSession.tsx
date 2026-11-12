@@ -1,38 +1,39 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { preciseSeconds, signedSeconds } from '../../app/copy';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { preciseSeconds } from '../../app/copy';
 import { setFlash, takeFlashKey } from '../../app/flash';
-import { navigate } from '../../app/router';
-import { createTake, jumpToBlock } from '../../app/sessionAdapters';
+import { goBack, navigate } from '../../app/router';
 import type { Take } from '../../domain/take';
-import { contextBefore, type BlockRange } from '../../domain/timeline';
+import { contextBefore, type BlockMark, type BlockRange } from '../../domain/timeline';
 import type { Script } from '../../domain/types';
 import type { Prompter, PrompterSnapshot } from '../../engine/prompter';
-import { isIOS, toggleFullscreen } from '../../media/device';
-import { TakeRecorder } from '../../media/recorder';
-import { isQuotaError } from '../../storage/idb';
+import { toggleFullscreen } from '../../media/device';
 import type { Settings } from '../../storage/local';
-import { listTakes, requestPersistence, saveTake } from '../../storage/takes';
-import { Button } from '../../ui/Button';
 import { CameraPreview } from './CameraPreview';
+import { DriftBadge } from './DriftBadge';
 import { PrompterDone } from './PrompterDone';
 import { RehearsalSummary } from './RehearsalSummary';
-import { DockMessage, LivePanel, ReadyPanel } from './SessionDock';
+import { SessionDock, type DockActions, type DockView } from './SessionDock';
 import type { SessionMode } from './sessionMode';
 import { Strip } from './Strip';
 import { useCamera } from './useCamera';
-import { useGestures } from './useGestures';
-import { usePrompterKeys } from './usePrompterKeys';
+import { useGestures, type GestureHandlers } from './useGestures';
+import { usePrompterKeys, type PrompterKeyHandlers } from './usePrompterKeys';
+import { usePrompterValue } from './usePrompterValue';
 import { useSilentAutoAdvance } from './useSilentAutoAdvance';
+import { useTakeFinalizer, type FinalizeResult } from './useTakeFinalizer';
 import { useWakeLock } from './useWakeLock';
 
 type Outcome =
   | { kind: 'active' }
-  | { kind: 'saving' }
   /** The recorder failed; a partial take may have been saved. */
   | { kind: 'failed' }
   | { kind: 'quota' }
-  | { kind: 'rehearsed' }
+  /** Marks are frozen here: the summary must not follow an engine that may be replaced. */
+  | { kind: 'rehearsed'; marks: BlockMark[]; incomplete: boolean }
   | { kind: 'prompted'; take: Take };
+
+/** Why a take ended before its last block, for the message on the take review. */
+type StopReason = 'user' | 'backgrounded' | 'camera-lost';
 
 interface PrompterSessionProps {
   script: Script;
@@ -50,9 +51,11 @@ interface PrompterSessionProps {
   onSaveScript(script: Script): void;
 }
 
-const DENIED_TEXT = {
-  ios: 'Câmera bloqueada. Vá em Ajustes > Safari > Câmera e escolha Permitir. Depois recarregue.',
-  desktop: 'Câmera bloqueada. Clique no cadeado ao lado do endereço e libere câmera e microfone.',
+const savedText = (take: Take, final: PrompterSnapshot, reason: StopReason): string => {
+  const lastBlock = (final.marks.at(-1)?.blockIndex ?? take.range.from) + 1;
+  if (reason === 'backgrounded') return `A gravação parou porque o app saiu da tela. O take foi salvo até o bloco ${lastBlock}.`;
+  if (reason === 'camera-lost') return `A câmera parou de responder. O take foi salvo até o bloco ${lastBlock}.`;
+  return `Take ${take.number} salvo · ${preciseSeconds(take.duration)}`;
 };
 
 export function PrompterSession({
@@ -67,29 +70,34 @@ export function PrompterSession({
   onForgetDevices,
   onSaveScript,
 }: PrompterSessionProps) {
-  const snapshot = useSyncExternalStore(prompter.subscribe, prompter.getSnapshot);
-  const { phase } = snapshot;
+  const phase = usePrompterValue(prompter, (snapshot) => snapshot.phase);
   const live = phase === 'countdown' || phase === 'running' || phase === 'tail';
 
   const [outcome, setOutcome] = useState<Outcome>({ kind: 'active' });
   const [starting, setStarting] = useState(false);
-  const recorderRef = useRef<TakeRecorder | null>(null);
   const startingRef = useRef(false);
-  const finalized = useRef(false);
-  const backgrounded = useRef(false);
+  const handled = useRef(false);
+  const stopReason = useRef<StopReason>('user');
   const alive = useRef(true);
 
+  const finalizer = useTakeFinalizer(mode, script, range);
   const cameraRequest = useMemo(
     () => ({ facing: settings.facing, videoDeviceId: settings.videoDeviceId, audioDeviceId: settings.audioDeviceId }),
     [settings.facing, settings.videoDeviceId, settings.audioDeviceId],
   );
-  const camera = useCamera(mode === 'camera', cameraRequest, onForgetDevices);
-  const stream = camera.state.status === 'ready' ? camera.state.stream : null;
+  const { state: cameraState, open: openCamera } = useCamera(mode === 'camera', cameraRequest, onForgetDevices);
+  const stream = cameraState.status === 'ready' ? cameraState.stream : null;
 
-  const active = outcome.kind === 'active';
+  /** The run ended and its take is being stored; the result replaces this state when it arrives. */
+  const saving = outcome.kind === 'active' && phase === 'finished' && mode !== 'rehearsal';
+  const active = outcome.kind === 'active' && !saving;
   const canStart = active && phase === 'ready' && !starting && (mode !== 'camera' || stream !== null);
+  const scriptId = script.id;
 
-  const exit = useCallback(() => navigate({ name: 'review', scriptId: script.id }, { replace: true }), [script.id]);
+  const exit = useCallback(
+    () => goBack({ name: 'review', scriptId }, (previous) => previous.name === 'takes' && previous.scriptId === scriptId),
+    [scriptId],
+  );
 
   /** The recorder must really be recording before the take clock starts, so marks match the file. */
   const start = useCallback(async () => {
@@ -97,67 +105,72 @@ export function PrompterSession({
     if (mode === 'camera' && stream) {
       startingRef.current = true;
       setStarting(true);
-      const recorder = new TakeRecorder(stream);
-      try {
-        await recorder.start();
-      } catch {
-        recorder.discard();
-        if (alive.current) setOutcome({ kind: 'failed' });
+      const recording = await finalizer.startRecording(stream);
+      if (!alive.current) return;
+      if (!recording) {
+        setOutcome({ kind: 'failed' });
         return;
       }
-      if (!alive.current) {
-        recorder.discard();
-        return;
-      }
-      recorderRef.current = recorder;
       setStarting(false);
     }
     prompter.start();
-  }, [canStart, mode, stream, prompter]);
+  }, [canStart, mode, stream, finalizer, prompter]);
 
   const stop = useCallback(() => {
     if (prompter.getSnapshot().phase === 'ready') exit();
     else prompter.stop();
   }, [prompter, exit]);
 
-  const primary = useCallback(() => {
-    if (prompter.getSnapshot().phase === 'ready') void start();
-    else prompter.advance();
-  }, [prompter, start]);
-
-  const setHolding = useCallback((holding: boolean) => prompter.setHolding(holding), [prompter]);
-
-  usePrompterKeys(
-    {
-      onPrimary: primary,
+  const keys = useMemo<PrompterKeyHandlers>(
+    () => ({
+      onPrimary: () => {
+        if (prompter.getSnapshot().phase === 'ready') void start();
+        else prompter.advance();
+      },
       onBack: () => prompter.back(),
-      onHold: setHolding,
+      onHold: (holding) => prompter.setHolding(holding),
       onStop: stop,
       onFullscreen: () => void toggleFullscreen(),
+      // Jumping and changing speed would break the marks of a real take: rehearsal only.
       onJump: (blockNumber) => {
-        // Jumping would break the block marks of a real take, so it is a rehearsal-only shortcut.
-        if (mode === 'rehearsal') jumpToBlock(prompter, script.blocks, range, range.from + blockNumber - 1);
+        if (mode === 'rehearsal' && blockNumber <= range.to - range.from + 1) prompter.jumpToBlock(range.from + blockNumber - 1);
       },
+      // The engine's speed is fixed per run, so it can only change before the rehearsal starts.
       onSpeed: (direction) => {
-        // The engine's speed is fixed per run, so it can only change before the rehearsal starts.
         if (mode === 'rehearsal' && prompter.getSnapshot().phase === 'ready') onSpeed(direction);
       },
-    },
-    active,
+    }),
+    [prompter, start, stop, mode, range, onSpeed],
   );
-  const gestures = useGestures({ onTap: () => prompter.advance(), onHold: setHolding, onSwipeBack: () => prompter.back() });
-  useSilentAutoAdvance(prompter, snapshot, settings.advance === 'manual');
+  usePrompterKeys(keys, active);
+
+  const gestureHandlers = useMemo<GestureHandlers>(
+    () => ({
+      onTap: () => prompter.advance(),
+      onHold: (holding) => prompter.setHolding(holding),
+      onSwipeBack: () => prompter.back(),
+    }),
+    [prompter],
+  );
+  const gestures = useGestures(gestureHandlers);
+  useSilentAutoAdvance(prompter, settings.advance === 'manual');
   useWakeLock(active && phase !== 'finished');
 
+  // Leaving the screen mid-take (Android back, iOS edge swipe) closes the take and keeps it,
+  // exactly like the app going to the background. Before the take starts there is nothing to keep.
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
-      // Leaving mid-take: nothing is saved, the crop pipeline is freed.
-      recorderRef.current?.discard();
-      recorderRef.current = null;
+      const current = prompter.getSnapshot().phase;
+      if (current === 'ready') {
+        finalizer.abandon();
+        return;
+      }
+      prompter.stop();
+      void finalizer.finalize(prompter.getSnapshot());
     };
-  }, []);
+  }, [prompter, finalizer]);
 
   // iOS suspends the camera when the app leaves the screen: close the take with what was recorded.
   useEffect(() => {
@@ -165,7 +178,7 @@ export function PrompterSession({
     const onVisibility = () => {
       const current = prompter.getSnapshot().phase;
       if (document.hidden && current !== 'ready' && current !== 'finished') {
-        backgrounded.current = true;
+        stopReason.current = 'backgrounded';
         prompter.stop();
       }
     };
@@ -173,76 +186,75 @@ export function PrompterSession({
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [mode, prompter]);
 
-  const finalize = useCallback(
-    async (final: PrompterSnapshot) => {
-      const recorder = recorderRef.current;
-      recorderRef.current = null;
-      const nothingShown = final.marks.length === 0;
+  // Webcam unplugged or camera taken away mid-take: same treatment.
+  const cameraLost = mode === 'camera' && cameraState.status === 'error';
+  useEffect(() => {
+    if (!cameraLost) return;
+    const current = prompter.getSnapshot().phase;
+    if (current !== 'ready' && current !== 'finished') {
+      stopReason.current = 'camera-lost';
+      prompter.stop();
+    }
+  }, [cameraLost, prompter]);
 
-      if (mode === 'rehearsal') {
-        if (nothingShown) onRestart();
-        else setOutcome({ kind: 'rehearsed' });
-        return;
-      }
-
-      setOutcome({ kind: 'saving' });
-      try {
-        const recorded = recorder ? await recorder.stop() : null;
-        if (!alive.current) return;
-        if (nothingShown) {
-          // Stopped during the countdown: there is no take to keep.
-          if (recorded?.failed) setOutcome({ kind: 'failed' });
-          else onRestart();
+  const showResult = useCallback(
+    (result: FinalizeResult, final: PrompterSnapshot) => {
+      switch (result.kind) {
+        case 'discarded':
+          onRestart();
           return;
-        }
-        const take = createTake({
-          script,
-          existing: await listTakes(script.id),
-          kind: mode === 'camera' ? 'camera' : 'prompter',
-          range,
-          snapshot: final,
-          recorded,
-        });
-        await saveTake(take, recorded?.blob);
-        void requestPersistence();
-        if (!alive.current) return;
-
-        if (recorded?.failed) {
-          // The partial take is saved and listed; the screen explains what happened.
-          setOutcome({ kind: 'failed' });
-        } else if (mode === 'camera') {
-          const lastBlock = (final.marks.at(-1)?.blockIndex ?? range.from) + 1;
-          setFlash(
-            takeFlashKey(take.id),
-            backgrounded.current
-              ? `A gravação parou porque o app saiu da tela. O take foi salvo até o bloco ${lastBlock}.`
-              : `Take ${take.number} salvo · ${preciseSeconds(take.duration)}`,
-          );
-          navigate({ name: 'takes', scriptId: script.id, takeId: take.id }, { replace: true });
-        } else {
-          setOutcome({ kind: 'prompted', take });
-        }
-      } catch (error) {
-        if (alive.current) setOutcome({ kind: isQuotaError(error) ? 'quota' : 'failed' });
+        case 'rehearsed':
+          setOutcome({ kind: 'rehearsed', marks: final.marks, incomplete: final.incomplete });
+          return;
+        case 'quota':
+        case 'failed':
+          setOutcome({ kind: result.kind });
+          return;
+        case 'saved':
+          if (result.recordingFailed) {
+            setOutcome({ kind: 'failed' });
+          } else if (result.take.kind === 'camera') {
+            setFlash(takeFlashKey(result.take.id), savedText(result.take, final, stopReason.current));
+            navigate({ name: 'takes', scriptId, takeId: result.take.id }, { replace: true });
+          } else {
+            setOutcome({ kind: 'prompted', take: result.take });
+          }
       }
     },
-    [mode, onRestart, range, script],
+    [onRestart, scriptId],
   );
 
   useEffect(() => {
-    if (phase !== 'finished' || finalized.current) return;
-    finalized.current = true;
-    void finalize(prompter.getSnapshot());
-  }, [phase, finalize, prompter]);
+    if (phase !== 'finished' || handled.current) return;
+    handled.current = true;
+    const final = prompter.getSnapshot();
+    // Saving happens whether or not this screen is still here; only showing the result needs it.
+    void finalizer.finalize(final).then((result) => {
+      if (alive.current) showResult(result, final);
+    });
+  }, [phase, prompter, finalizer, showResult]);
+
+  const actions = useMemo<DockActions>(
+    () => ({
+      onStart: () => void start(),
+      onStop: stop,
+      onExit: exit,
+      onRestart,
+      onPromptOnly,
+      onOpenCamera: () => void openCamera(),
+      onTakes: () => navigate({ name: 'takes', scriptId, takeId: null }, { replace: true }),
+    }),
+    [start, stop, exit, onRestart, onPromptOnly, openCamera, scriptId],
+  );
 
   if (outcome.kind === 'rehearsed') {
     return (
       <RehearsalSummary
         script={script}
         range={range}
-        marks={snapshot.marks}
+        marks={outcome.marks}
         measured={settings.advance === 'manual'}
-        incomplete={snapshot.incomplete}
+        incomplete={outcome.incomplete}
         onAgain={onRestart}
         onSaveScript={onSaveScript}
       />
@@ -250,101 +262,32 @@ export function PrompterSession({
   }
   if (outcome.kind === 'prompted') return <PrompterDone script={script} take={outcome.take} onAgain={onRestart} />;
 
-  const cameraStatus = mode === 'camera' ? camera.state.status : 'ready';
-  const opening = cameraStatus === 'checking' || cameraStatus === 'opening' || starting;
-  const status = outcome.kind === 'saving' ? 'Salvando take…' : active && opening ? 'Abrindo a câmera…' : null;
+  const opening = mode === 'camera' && (cameraState.status === 'checking' || cameraState.status === 'opening');
+  const busy = opening || starting;
+  const status = saving ? 'Salvando take…' : active && busy ? 'Abrindo a câmera…' : null;
 
-  const currentBlock = snapshot.current ? script.blocks[snapshot.current.blockIndex] : undefined;
-  const showDrift =
-    phase === 'running' &&
-    settings.advance === 'timed' &&
-    (mode === 'rehearsal' || settings.showDriftWhileRecording) &&
-    Math.abs(snapshot.drift) >= 0.1;
-  const toTakes = () => navigate({ name: 'takes', scriptId: script.id, takeId: null }, { replace: true });
+  let view: DockView = { kind: 'none' };
+  if (outcome.kind === 'failed' || outcome.kind === 'quota') view = { kind: outcome.kind };
+  else if (saving || busy) view = { kind: 'none' };
+  else if (mode === 'camera' && (cameraState.status === 'explain' || cameraState.status === 'error')) view = { kind: 'camera', state: cameraState };
+  else if (phase === 'ready') view = { kind: 'ready', canStart };
+  else if (live) view = { kind: 'live' };
 
-  const dock = () => {
-    if (outcome.kind === 'failed') {
-      return (
-        <DockMessage text="A gravação falhou. Tente de novo ou use só como prompter.">
-          <Button variant="primary" onClick={onRestart}>
-            Tentar de novo
-          </Button>
-          <Button onClick={onPromptOnly}>Só prompter</Button>
-          <Button variant="ghost" onClick={toTakes}>
-            Ver takes
-          </Button>
-        </DockMessage>
-      );
-    }
-    if (outcome.kind === 'quota') {
-      return (
-        <DockMessage text="Sem espaço para guardar o take. Baixe ou apague takes antigos.">
-          <Button variant="primary" onClick={toTakes}>
-            Ver takes
-          </Button>
-        </DockMessage>
-      );
-    }
-    if (outcome.kind === 'saving' || opening) return null;
-    if (camera.state.status === 'explain' && mode === 'camera') {
-      return (
-        <DockMessage text="Preciso da câmera e do microfone para gravar. O vídeo fica só no seu aparelho.">
-          <Button variant="primary" onClick={() => void camera.open()}>
-            Permitir
-          </Button>
-          <Button onClick={onPromptOnly}>Usar só como prompter</Button>
-          <Button variant="ghost" onClick={exit}>
-            Voltar
-          </Button>
-        </DockMessage>
-      );
-    }
-    if (camera.state.status === 'error' && mode === 'camera') {
-      const { kind } = camera.state;
-      const text =
-        kind === 'denied'
-          ? DENIED_TEXT[isIOS() ? 'ios' : 'desktop']
-          : kind === 'in-use'
-            ? 'A câmera está sendo usada por outro app. Feche-o e tente de novo.'
-            : kind === 'unsupported'
-              ? 'Este navegador não dá acesso à câmera. Use só como prompter.'
-              : 'Não encontrei uma câmera para gravar. Conecte uma e tente de novo.';
-      return (
-        <DockMessage text={text}>
-          <Button variant="primary" onClick={onPromptOnly}>
-            Usar só como prompter
-          </Button>
-          {kind !== 'unsupported' && <Button onClick={() => void camera.open()}>Tentar de novo</Button>}
-          <Button variant="ghost" onClick={exit}>
-            Voltar
-          </Button>
-        </DockMessage>
-      );
-    }
-    if (phase === 'ready') {
-      return <ReadyPanel mode={mode} advance={settings.advance} canStart={canStart} onStart={() => void start()} onExit={exit} />;
-    }
-    if (live) return <LivePanel mode={mode} snapshot={snapshot} onStop={stop} />;
-    return null;
-  };
+  const showDrift = settings.advance === 'timed' && (mode === 'rehearsal' || settings.showDriftWhileRecording);
 
   return (
     <div className="stage" data-mode={mode} data-live={live} data-size={settings.textSize} {...gestures}>
       {stream && <CameraPreview stream={stream} />}
       <Strip
-        snapshot={snapshot}
+        prompter={prompter}
         context={contextBefore(script.blocks, range)}
         status={status}
         mirror={settings.mirrorText}
-        editNote={mode === 'rehearsal' && phase === 'running' ? currentBlock?.edit || null : null}
+        editNotesOf={mode === 'rehearsal' && phase === 'running' ? script.blocks : null}
       />
       {mode === 'rehearsal' && <span className="stage__badge">ENSAIO</span>}
-      {showDrift && (
-        <span className="stage__drift" aria-label="Desvio em relação ao roteiro">
-          {signedSeconds(snapshot.drift)}
-        </span>
-      )}
-      <div className="dock">{dock()}</div>
+      {showDrift && <DriftBadge prompter={prompter} />}
+      <SessionDock view={view} mode={mode} advance={settings.advance} prompter={prompter} actions={actions} />
       <p className="stage__rotate" role="alert">
         Gire o celular para a vertical.
       </p>

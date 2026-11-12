@@ -1,4 +1,4 @@
-import { navigate } from '../../app/router';
+import { goBack, navigate } from '../../app/router';
 import { useTakes } from '../../app/useTakes';
 import type { Script } from '../../domain/types';
 import { Button } from '../../ui/Button';
@@ -15,7 +15,7 @@ interface TakeScreenProps {
 }
 
 export function TakeScreen({ script, takeId, onSaveScript }: TakeScreenProps) {
-  const { takes, loading, update, remove } = useTakes(script.id);
+  const { takes, loading, error, update, remove, removing } = useTakes(script.id);
   const take = takes.find((candidate) => candidate.id === takeId) ?? takes.at(-1);
   const open = (id: string | null) => navigate({ name: 'takes', scriptId: script.id, takeId: id }, { replace: true });
 
@@ -26,7 +26,7 @@ export function TakeScreen({ script, takeId, onSaveScript }: TakeScreenProps) {
           type="button"
           className="icon-btn"
           aria-label="Voltar para o roteiro"
-          onClick={() => navigate({ name: 'review', scriptId: script.id })}
+          onClick={() => goBack({ name: 'review', scriptId: script.id })}
         >
           <Icon name="back" />
         </button>
@@ -35,6 +35,11 @@ export function TakeScreen({ script, takeId, onSaveScript }: TakeScreenProps) {
 
       <main>
         {loading && <p className="muted">Abrindo takes…</p>}
+        {error && (
+          <p className="notice notice--warn" role="alert">
+            {error}
+          </p>
+        )}
 
         {!loading && !take && (
           <div className="takes__empty">
@@ -52,8 +57,13 @@ export function TakeScreen({ script, takeId, onSaveScript }: TakeScreenProps) {
               key={take.id}
               script={script}
               take={take}
-              onUpdate={(next) => void update(next)}
-              onDelete={() => void remove(take.id).then(() => open(null))}
+              onUpdate={update}
+              deleting={removing === take.id}
+              onDelete={() =>
+                void remove(take.id).then((removed) => {
+                  if (removed) open(null);
+                })
+              }
               onSaveScript={onSaveScript}
             />
             <TakeList takes={takes} currentId={take.id} onOpen={open} />

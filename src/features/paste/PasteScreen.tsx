@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { navigate } from '../../app/router';
 import { parseScript } from '../../domain/parser';
 import type { Script } from '../../domain/types';
@@ -22,7 +22,6 @@ const ERROR_TEXT: Record<PasteError, string> = {
 export function PasteScreen({ scripts, onCreate, onDelete }: PasteScreenProps) {
   const [text, setText] = useState('');
   const [error, setError] = useState<PasteError | null>(null);
-  const pasted = useRef(false);
 
   /** Parses and, when it works, goes straight to the review: there is no "process" step. */
   const submit = (source: string) => {
@@ -71,15 +70,19 @@ export function PasteScreen({ scripts, onCreate, onDelete }: PasteScreenProps) {
           aria-describedby={error ? 'paste-error' : undefined}
           aria-invalid={error === 'unrecognized'}
           placeholder={'| Tempo | Você fala | O que eu ponho na edição |\n| 0–3s | Fisio autônomo: onde tá a ficha… | Legenda grande |\n\nou uma frase por linha.'}
-          onPaste={() => {
-            pasted.current = true;
+          onPaste={(event) => {
+            // The pasted text is read from the event itself: the parse runs on paste, never on typing.
+            const clip = event.clipboardData.getData('text/plain');
+            if (!clip) return;
+            event.preventDefault();
+            const field = event.currentTarget;
+            const value = field.value.slice(0, field.selectionStart) + clip + field.value.slice(field.selectionEnd);
+            setText(value);
+            submit(value);
           }}
           onChange={(event) => {
-            const value = event.target.value;
-            setText(value);
-            if (pasted.current) submit(value);
-            else setError(null);
-            pasted.current = false;
+            setText(event.target.value);
+            setError(null);
           }}
         />
 

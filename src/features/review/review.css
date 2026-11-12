@@ -172,6 +172,8 @@
   border: 1px solid var(--accent);
   border-radius: 8px;
   background: var(--bg);
+  /* 16px minimum: iOS zooms the page when a smaller field gets focus. */
+  font-size: 16px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -311,6 +313,8 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
   resize: vertical;
   field-sizing: content;
 }

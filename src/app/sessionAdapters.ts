@@ -4,9 +4,9 @@
  */
 import { newId } from '../domain/ids';
 import { nextTakeNumber, type BlockPace, type Take, type TakeKind } from '../domain/take';
-import { buildTimeline, type BlockMark, type BlockRange } from '../domain/timeline';
+import type { BlockMark, BlockRange } from '../domain/timeline';
 import { blockDuration, type Block, type Script } from '../domain/types';
-import type { Prompter, PrompterSnapshot } from '../engine/prompter';
+import type { PrompterSnapshot } from '../engine/prompter';
 import type { RecordedTake } from '../media/recorder';
 
 export const isFullRange = (blocks: readonly Block[], range: BlockRange): boolean =>
@@ -43,26 +43,13 @@ export const createTake = (input: {
   createdAt: Date.now(),
 });
 
-/** Missing in the engine: `jumpToBlock`. Emulated by stepping chunk by chunk. */
-export const jumpToBlock = (
-  prompter: Prompter,
-  blocks: readonly Block[],
-  range: BlockRange,
-  targetBlock: number,
-): void => {
-  const { current, phase } = prompter.getSnapshot();
-  if (phase !== 'running' || !current) return;
-  const { items } = buildTimeline(blocks, range);
-  const here = items.findIndex(
-    (item) => item.blockIndex === current.blockIndex && item.chunkIndex === current.chunkIndex,
-  );
-  const there = items.findIndex((item) => item.blockIndex === targetBlock);
-  if (here < 0 || there < 0) return;
-  for (let step = Math.abs(there - here); step > 0; step--) {
-    if (there > here) prompter.advance();
-    else prompter.back();
-  }
-};
+/** A mark shorter than this is a block passed through (skipped), not one that was spoken. */
+const MIN_SPOKEN_SECONDS = 0.2;
+
+export const spokenMarks = (marks: readonly BlockMark[]): BlockMark[] =>
+  marks.filter((mark) => mark.end - mark.start >= MIN_SPOKEN_SECONDS);
+
+export const sameRange = (a: BlockRange, b: BlockRange): boolean => a.from === b.from && a.to === b.to;
 
 /** Durations for "Usar meus tempos": measured where there is a mark, scripted elsewhere. */
 export const measuredDurations = (blocks: readonly Block[], paces: readonly BlockPace[]): number[] =>

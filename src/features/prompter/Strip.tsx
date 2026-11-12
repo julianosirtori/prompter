@@ -1,26 +1,37 @@
 import { capitalize } from '../../app/copy';
 import { formatSeconds } from '../../domain/time';
-import type { PrompterSnapshot } from '../../engine/prompter';
+import type { Block } from '../../domain/types';
+import type { Prompter, PrompterSnapshot } from '../../engine/prompter';
 import { Icon } from '../../ui/Icon';
+import { usePrompterSnapshot } from './usePrompterValue';
 
 interface StripProps {
-  snapshot: PrompterSnapshot;
+  prompter: Prompter;
   /** Last chunk of the previous block, shown greyed when re-recording a block. */
   context: string | null;
   /** Replaces the text while the camera opens or the take is saved. */
   status: string | null;
   mirror: boolean;
-  /** Edit note of the current block; only passed while rehearsing. */
-  editNote: string | null;
+  /** Passed only while rehearsing: the edit note of the block on screen shows under the strip. */
+  editNotesOf: readonly Block[] | null;
 }
 
 /** The band next to the lens: current chunk, next chunk and the block bar. Nothing else. */
-export function Strip({ snapshot, context, status, mirror, editNote }: StripProps) {
+export function Strip({ prompter, context, status, mirror, editNotesOf }: StripProps) {
   return (
     <div className={`strip${mirror ? ' is-mirrored' : ''}`}>
-      <div className="strip__inner">{status ? <StripStatus text={status} /> : <StripText snapshot={snapshot} context={context} editNote={editNote} />}</div>
+      <div className="strip__inner">
+        {status ? <StripStatus text={status} /> : <LiveText prompter={prompter} context={context} editNotesOf={editNotesOf} />}
+      </div>
     </div>
   );
+}
+
+/** The only part of the screen that follows the engine frame by frame. */
+function LiveText({ prompter, context, editNotesOf }: Pick<StripProps, 'prompter' | 'context' | 'editNotesOf'>) {
+  const snapshot = usePrompterSnapshot(prompter);
+  const block = snapshot.current ? editNotesOf?.[snapshot.current.blockIndex] : undefined;
+  return <StripText snapshot={snapshot} context={context} editNote={block?.edit || null} />;
 }
 
 function StripStatus({ text }: { text: string }) {
@@ -41,7 +52,7 @@ function Context({ text }: { text: string }) {
   );
 }
 
-function StripText({ snapshot, context, editNote }: Pick<StripProps, 'snapshot' | 'context' | 'editNote'>) {
+function StripText({ snapshot, context, editNote }: { snapshot: PrompterSnapshot; context: string | null; editNote: string | null }) {
   const { phase, current, next, holding, blockProgress, countdown } = snapshot;
 
   if (phase === 'countdown') {

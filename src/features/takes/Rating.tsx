@@ -1,3 +1,5 @@
+import { onRadioGroupKeyDown, radioTabIndex } from '../../ui/radioGroup';
+
 interface RatingProps {
   value: number | undefined;
   onChange(value: number): void;
@@ -12,7 +14,7 @@ export function Rating({ value, onChange }: RatingProps) {
       <h2 id="rating-title" className="eyebrow">
         Pareceu conversa ou leitura?
       </h2>
-      <div className="rating" role="radiogroup" aria-labelledby="rating-title">
+      <div className="rating" role="radiogroup" aria-labelledby="rating-title" onKeyDown={onRadioGroupKeyDown}>
         <span className="muted" aria-hidden="true">
           leitura
         </span>
@@ -22,6 +24,7 @@ export function Rating({ value, onChange }: RatingProps) {
             type="button"
             role="radio"
             aria-checked={value === point}
+            tabIndex={radioTabIndex(value === point, point === 1, value !== undefined)}
             aria-label={`${point} de 5${point === 1 ? ', leitura' : point === 5 ? ', conversa' : ''}`}
             className="rating__point"
             onClick={() => onChange(point)}

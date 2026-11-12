@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+import { useRef, type RefObject, type SyntheticEvent } from 'react';
 import type { TakeVideo } from './useTakeVideo';
 
 interface TakePlayerProps {
@@ -8,21 +8,36 @@ interface TakePlayerProps {
   onTime(seconds: number): void;
 }
 
-/**
- * MediaRecorder files often report an infinite duration, which makes seeking fail. Seeking far
- * past the end once forces the browser to work out the real duration.
- */
-const fixDuration = (video: HTMLVideoElement): void => {
-  if (Number.isFinite(video.duration)) return;
-  const restore = () => {
-    video.removeEventListener('timeupdate', restore);
-    video.currentTime = 0;
-  };
-  video.addEventListener('timeupdate', restore);
-  video.currentTime = Number.MAX_SAFE_INTEGER;
-};
+type VideoEvent = SyntheticEvent<HTMLVideoElement>;
 
 export function TakePlayer({ video, videoRef, prompterOnly, onTime }: TakePlayerProps) {
+  /**
+   * MediaRecorder files often report an infinite duration, which makes seeking fail. Seeking far
+   * past the end once makes the browser work out the real duration. While that correction runs
+   * its fake position is not reported, and it never undoes a seek the user made meanwhile.
+   */
+  const fixing = useRef(false);
+
+  const startFix = (event: VideoEvent) => {
+    const player = event.currentTarget;
+    if (Number.isFinite(player.duration)) return;
+    fixing.current = true;
+    player.currentTime = Number.MAX_SAFE_INTEGER;
+  };
+
+  const endFix = (event: VideoEvent) => {
+    const player = event.currentTarget;
+    if (!fixing.current || !Number.isFinite(player.duration)) return;
+    fixing.current = false;
+    // Still parked at the end by the correction: back to the start. Anywhere else was the user.
+    if (player.currentTime >= player.duration - 0.25) player.currentTime = 0;
+  };
+
+  const report = (event: VideoEvent) => {
+    endFix(event);
+    if (!fixing.current) onTime(event.currentTarget.currentTime);
+  };
+
   return (
     <div className={`player${video.status === 'missing' ? ' player--note' : ''}`}>
       {video.status === 'ready' ? (
@@ -33,9 +48,10 @@ export function TakePlayer({ video, videoRef, prompterOnly, onTime }: TakePlayer
           playsInline
           preload="metadata"
           aria-label="Vídeo do take"
-          onLoadedMetadata={(event) => fixDuration(event.currentTarget)}
-          onTimeUpdate={(event) => onTime(event.currentTarget.currentTime)}
-          onSeeked={(event) => onTime(event.currentTarget.currentTime)}
+          onLoadedMetadata={startFix}
+          onDurationChange={endFix}
+          onTimeUpdate={report}
+          onSeeked={report}
         />
       ) : (
         <p className="player__empty">

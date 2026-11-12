@@ -26,6 +26,8 @@ interface TakeDetailProps {
   take: Take;
   onUpdate(take: Take): void;
   onDelete(): void;
+  /** The take is being deleted: its controls wait. */
+  deleting: boolean;
   onSaveScript(script: Script): void;
 }
 
@@ -33,7 +35,7 @@ const record = (scriptId: string, range: BlockRange | null) =>
   navigate({ name: 'session', scriptId, kind: 'record', range });
 
 /** Review of one take: player, block chips, synced edit note, pace and what to do next. */
-export function TakeDetail({ script, take, onUpdate, onDelete, onSaveScript }: TakeDetailProps) {
+export function TakeDetail({ script, take, onUpdate, onDelete, deleting, onSaveScript }: TakeDetailProps) {
   const video = useTakeVideo(take);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [time, setTime] = useState(0);
@@ -45,6 +47,9 @@ export function TakeDetail({ script, take, onUpdate, onDelete, onSaveScript }: T
   const activeBlock = activeMark ? script.blocks[activeMark.blockIndex] : undefined;
   const lastBlock = take.marks.at(-1)?.blockIndex ?? take.range.from;
   const baseName = takeFileName(script, take, 'x').replace(/\.x$/, '');
+  // Block to record again with R: the one under the playhead, or, right after a take that was
+  // stopped, the block it stopped on.
+  const currentBlock = take.incomplete && time === 0 ? lastBlock : (activeMark?.blockIndex ?? lastBlock);
 
   const seek = (mark: BlockMark) => {
     const player = videoRef.current;
@@ -67,7 +72,7 @@ export function TakeDetail({ script, take, onUpdate, onDelete, onSaveScript }: T
     void saveFile(blob, `${baseName}_marcadores.${format}`);
   };
 
-  useHotkeys({ r: () => record(script.id, { from: activeMark?.blockIndex ?? lastBlock, to: activeMark?.blockIndex ?? lastBlock }) });
+  useHotkeys({ r: () => record(script.id, { from: currentBlock, to: currentBlock }) });
 
   return (
     <div className="take">
@@ -138,7 +143,7 @@ export function TakeDetail({ script, take, onUpdate, onDelete, onSaveScript }: T
               .csv
             </Button>
           </div>
-          <Button variant="ghost" icon="trash" onClick={() => setConfirming(true)}>
+          <Button variant="ghost" icon="trash" disabled={deleting} onClick={() => setConfirming(true)}>
             Apagar
           </Button>
         </div>
@@ -146,7 +151,10 @@ export function TakeDetail({ script, take, onUpdate, onDelete, onSaveScript }: T
           <ConfirmInline
             question="Apagar este take? Não dá pra desfazer."
             confirmLabel="Apagar"
-            onConfirm={onDelete}
+            onConfirm={() => {
+              setConfirming(false);
+              onDelete();
+            }}
             onCancel={() => setConfirming(false)}
           />
         )}
@@ -165,7 +173,7 @@ export function TakeDetail({ script, take, onUpdate, onDelete, onSaveScript }: T
       <RangePicker
         open={picking}
         blocks={script.blocks}
-        initial={activeMark?.blockIndex ?? lastBlock}
+        initial={currentBlock}
         onClose={() => setPicking(false)}
         onPick={(range) => record(script.id, range)}
       />

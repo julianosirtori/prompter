@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { paceSummary, scriptSummary, warningKey } from '../../app/copy';
 import { reviewFlashKey, useFlash } from '../../app/flash';
-import { navigate, type SessionKind } from '../../app/router';
+import { goBack, navigate, type SessionKind } from '../../app/router';
 import type { UpdateSettings } from '../../app/useSettings';
 import { useTakes } from '../../app/useTakes';
 import {
@@ -61,7 +61,7 @@ export function ReviewScreen({ script, settings, onSettings, onChange }: ReviewS
   return (
     <div className="screen review">
       <header className="review__head">
-        <button type="button" className="icon-btn" aria-label="Voltar para o início" onClick={() => navigate({ name: 'home' })}>
+        <button type="button" className="icon-btn" aria-label="Voltar para o início" onClick={() => goBack({ name: 'home' })}>
           <Icon name="back" />
         </button>
         <div className="review__heading">

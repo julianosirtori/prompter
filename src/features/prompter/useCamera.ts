@@ -49,6 +49,16 @@ export const useCamera = (enabled: boolean, request: CameraRequest, onFallback: 
       current.stream = stream;
       // The saved device is gone: forget it so the settings stop pointing at nothing.
       if (stream.usedFallback) latest.current.onFallback();
+      // A track ends when the webcam is unplugged or iOS hands the camera to a phone call. The
+      // preview would freeze silently, so it becomes an error the screen can explain.
+      const onEnded = () => {
+        if (mine !== current.generation) return;
+        current.generation++;
+        stopStream(stream);
+        current.stream = null;
+        setState({ status: 'error', kind: 'in-use' });
+      };
+      stream.getTracks().forEach((track) => track.addEventListener('ended', onEnded, { once: true }));
       setState({ status: 'ready', stream });
     } catch (error) {
       if (mine !== current.generation) return;
