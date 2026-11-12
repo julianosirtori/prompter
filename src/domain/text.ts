@@ -44,5 +44,6 @@ export const extractDirections = (value: string): { speech: string; directions: 
     if (direction) directions.push(direction);
     return ' ';
   });
-  return { speech: cleanInline(speech), directions };
+  // Removing "(aponta)" from "grátis (aponta)." must not leave "grátis ."
+  return { speech: cleanInline(speech).replace(/\s+([.,;:!?…])/g, '$1'), directions };
 };

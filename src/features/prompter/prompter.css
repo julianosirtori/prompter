@@ -1,0 +1,513 @@
+/*
+ * The recording stage. Pure black, cream text, amber only for stage directions.
+ * Nothing here may compete with the text or change the light on the face.
+ */
+.stage {
+  --chunk: 34px;
+  --chunk-next: 24px;
+
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+  color: var(--text);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.stage[data-size='sm'] {
+  --chunk: 30px;
+  --chunk-next: 22px;
+}
+
+.stage[data-size='lg'] {
+  --chunk: 40px;
+  --chunk-next: 28px;
+}
+
+/* Camera: full screen behind the text on phones, dimmed once the take starts. */
+.stage__camera {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.4s;
+}
+
+.stage__camera video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stage__camera video.is-mirrored {
+  transform: scaleX(-1);
+}
+
+.stage[data-live='true'] .stage__camera {
+  opacity: 0.3;
+}
+
+/* The strip: glued to the top, next to the lens. */
+.strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  min-height: 25dvh;
+  padding: calc(var(--safe-top) + 10px) 16px 48px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.8) 0%, rgba(0, 0, 0, 0.6) 55%, rgba(0, 0, 0, 0) 100%);
+  pointer-events: none;
+}
+
+.strip.is-mirrored {
+  transform: scaleX(-1);
+}
+
+.strip__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: min(70%, 480px);
+  text-align: center;
+}
+
+.strip__current {
+  font-size: var(--chunk);
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.strip__next {
+  font-size: var(--chunk-next);
+  font-weight: 600;
+  line-height: 1.15;
+  opacity: 0.4;
+  text-wrap: balance;
+}
+
+.strip__next.is-direction {
+  color: var(--amber);
+  font-style: italic;
+  opacity: 0.55;
+}
+
+.strip__direction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--amber);
+  font-size: calc(var(--chunk) * 0.85);
+  font-style: italic;
+  font-weight: 600;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.strip__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--amber);
+  font-size: 15px;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.strip__count {
+  font-size: 84px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  animation: count-in 0.25s ease-out;
+}
+
+@keyframes count-in {
+  from {
+    opacity: 0.3;
+    transform: scale(0.9);
+  }
+}
+
+.strip__context {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #8e8a82;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.strip__context-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.strip__holding {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.strip__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: 16px;
+}
+
+.strip__bar {
+  position: relative;
+  width: 100%;
+  height: 2px;
+  margin-top: 8px;
+  border-radius: 1px;
+  background: rgba(245, 240, 230, 0.18);
+  overflow: visible;
+}
+
+.strip__bar-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 1px;
+  background: var(--text);
+  transform-origin: left;
+}
+
+/* Block change: a soft pulse on the edge of the strip, never a flash. */
+.strip__pulse {
+  position: absolute;
+  inset: -2px -6px;
+  border-radius: 4px;
+  background: rgba(245, 240, 230, 0.35);
+  opacity: 0;
+  animation: pulse 0.6s ease-out;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 0.6;
+  }
+}
+
+.strip__note {
+  margin-top: 6px;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+/* Anchor for the eyes when there is nothing to say. */
+.strip__gaze {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: rgba(245, 240, 230, 0.55);
+}
+
+.stage__badge,
+.stage__drift {
+  position: absolute;
+  top: calc(var(--safe-top) + 12px);
+  padding: 3px 8px;
+  border: 1px solid rgba(245, 240, 230, 0.3);
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  pointer-events: none;
+}
+
+/* On phones the corner is where the text lives, so the rehearsal mark sits in the dock instead. */
+.stage__badge {
+  display: none;
+  left: calc(var(--safe-left) + 12px);
+}
+
+.dock__mode {
+  letter-spacing: 0.1em;
+}
+
+.stage__drift {
+  right: calc(var(--safe-right) + 12px);
+  font-size: 13px;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The dock: status and the few controls, far from the lens. */
+.dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px calc(var(--safe-right) + 20px) calc(var(--safe-bottom) + 20px) calc(var(--safe-left) + 20px);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0));
+  text-align: center;
+  pointer-events: none;
+}
+
+.dock:empty {
+  display: none;
+}
+
+.dock > * {
+  pointer-events: auto;
+}
+
+.dock__ready,
+.dock__message,
+.dock__live {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 420px;
+}
+
+.dock__lead,
+.dock__message p {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.dock__tip {
+  color: var(--text-2);
+  font-size: 14px;
+  text-wrap: pretty;
+}
+
+.dock__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dock__ready .btn--primary {
+  min-width: 160px;
+}
+
+.dock__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.06em;
+}
+
+.rec__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rec);
+  animation: rec-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes rec-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.dock__hint {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.dock__take-bar {
+  width: 160px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(245, 240, 230, 0.15);
+  overflow: hidden;
+}
+
+.dock__take-bar span {
+  display: block;
+  height: 100%;
+  background: rgba(245, 240, 230, 0.6);
+  transform-origin: left;
+}
+
+.stage__rotate {
+  display: none;
+}
+
+/* Phones are portrait only. */
+@media (orientation: landscape) and (pointer: coarse) and (max-height: 560px) {
+  .stage__rotate {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: #000;
+    font-size: 20px;
+    font-weight: 600;
+    text-align: center;
+  }
+}
+
+/* Computer: strip under the webcam, 9:16 preview out of the way, controls bottom left. */
+@media (min-width: 768px) {
+  .stage {
+    --chunk: 48px;
+    --chunk-next: 32px;
+  }
+
+  .stage[data-size='sm'] {
+    --chunk: 40px;
+    --chunk-next: 30px;
+  }
+
+  .stage[data-size='lg'] {
+    --chunk: 56px;
+    --chunk-next: 38px;
+  }
+
+  .strip {
+    padding-top: 12px;
+    background: none;
+  }
+
+  .stage__badge {
+    display: block;
+  }
+
+  .dock__mode {
+    display: none;
+  }
+
+  .strip__inner {
+    width: min(480px, 100%);
+  }
+
+  .stage__camera {
+    inset: auto;
+    top: 34dvh;
+    left: 50%;
+    height: 52dvh;
+    aspect-ratio: 9 / 16;
+    translate: -50% 0;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  /* Once the take starts the preview shrinks to a corner so it stops pulling the eyes down. */
+  .stage[data-live='true'] .stage__camera {
+    top: auto;
+    left: auto;
+    right: 24px;
+    bottom: 24px;
+    height: 200px;
+    translate: none;
+    opacity: 1;
+  }
+
+  .dock {
+    right: auto;
+    align-items: flex-start;
+    max-width: 440px;
+    padding: 24px;
+    background: none;
+    text-align: left;
+  }
+
+  .dock__ready,
+  .dock__message,
+  .dock__live {
+    align-items: flex-start;
+  }
+
+  .dock__actions {
+    justify-content: flex-start;
+  }
+}
+
+/* End-of-session pages (rehearsal summary, prompter-only done). */
+.summary {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+}
+
+.summary section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.summary__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.summary__actions .btn--lg {
+  flex: 1 1 160px;
+}
+
+.pace-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.pace-table th,
+.pace-table td {
+  padding: 10px 8px 10px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 500;
+}
+
+.pace-table thead th {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pace-table td:last-child {
+  color: var(--text-2);
+}
+
+.pace-table .is-off td:last-child,
+.pace-table .is-off td:nth-child(2) {
+  color: var(--amber);
+}
