@@ -18,12 +18,16 @@ const HEADER_KEYWORDS = {
 
 type Role = keyof typeof HEADER_KEYWORDS;
 
-const roleOfHeader = (cell: string): Role | null => {
+/** Whole-word match, so "Sentimento" is not "time" and "Contexto" is not "texto". */
+const containsPhrase = (text: string, phrase: string): boolean =>
+  ` ${text.replace(/[^a-z0-9]+/g, ' ')} `.includes(` ${phrase.replace(/[^a-z0-9]+/g, ' ')} `);
+
+export const roleOfHeader = (cell: string): Role | null => {
   const folded = fold(cell);
   if (!folded) return null;
   // Check edit before speech: "O que eu ponho na edição" must not match "fala".
   for (const role of ['time', 'edit', 'speech'] as const) {
-    if (HEADER_KEYWORDS[role].some((keyword) => folded.includes(keyword))) return role;
+    if (HEADER_KEYWORDS[role].some((keyword) => containsPhrase(folded, keyword))) return role;
   }
   return null;
 };
@@ -47,7 +51,13 @@ export const detectColumns = (header: Row | null, body: readonly Row[]): ColumnM
     });
   }
 
-  if (map.time === -1) map.time = findTimeColumn(body);
+  // The content decides the time column; a header named "Tempo" over non-time cells loses.
+  const timeByContent = findTimeColumn(body);
+  if (timeByContent !== -1) {
+    map.time = timeByContent;
+    if (map.speech === timeByContent) map.speech = -1;
+    if (map.edit === timeByContent) map.edit = -1;
+  }
 
   const free = () => columns.filter((index) => index !== map.time && index !== map.speech && index !== map.edit);
   if (map.speech === -1) {

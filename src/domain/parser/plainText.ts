@@ -15,7 +15,8 @@ export interface RawBlock {
   extra: string[];
 }
 
-const EDIT_PREFIX = /\s*(?:[—–-]\s*)?\b(?:na edi[çc][ãa]o|edi[çc][ãa]o|visual|b-?roll)\s*:\s*/i;
+/** An edit note starts the line or follows a spaced dash: "fala — Edição: ...". */
+const EDIT_PREFIX = /(?:^|\s[—–-])\s*(?:na edi[çc][ãa]o|edi[çc][ãa]o|visual|b-?roll)\s*:\s*/i;
 const HEADING = /^\s*#{1,6}\s+(.*)$/;
 const LIST_MARKER = /^\s*(?:[-*•]|\d+[.)])\s+/;
 
@@ -44,7 +45,10 @@ export const readPlainText = (lines: readonly string[]): { title: string | null;
     if (line.trim()) content.push(line.replace(LIST_MARKER, ''));
   }
 
-  const timed = content.some((line) => parseTimePrefix(line) !== null);
+  // One line that happens to start like a time must not turn a free-text script into a timed one.
+  const timedLines = content.filter((line) => parseTimePrefix(line) !== null).length;
+  const firstIsTimed = content[0] !== undefined && parseTimePrefix(content[0]) !== null;
+  const timed = firstIsTimed || (timedLines >= 2 && timedLines >= content.length / 2);
   const blocks: RawBlock[] = [];
   for (const line of content) {
     const prefixed = timed ? parseTimePrefix(line) : null;

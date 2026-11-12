@@ -45,9 +45,12 @@ export const parseTimeCell = (cell: string): TimeSpec | null => {
 export const parseTimePrefix = (line: string): { time: TimeSpec; rest: string } | null => {
   const match = LINE_PREFIX.exec(line);
   if (!match?.[1]) return null;
-  const [, first, firstUnit, second, secondUnit] = match;
-  // "3 motivos pra..." is speech, not a time: a bare number needs a unit, a range or a colon.
-  const looksLikeTime = Boolean(second ?? firstUnit ?? secondUnit) || first.includes(':');
+  const [whole, first, firstUnit, second, secondUnit] = match;
+  if (!first) return null;
+  // In free text "3 motivos", "3-7 dicas" and "5 a 10 minutos" are speech: a time needs a
+  // seconds unit, a colon ("0:03") or brackets ("[0–3]").
+  const bracketed = whole.trimStart().startsWith('[');
+  const looksLikeTime = Boolean(firstUnit ?? secondUnit) || first.includes(':') || bracketed;
   if (!looksLikeTime) return null;
   return { time: toSpec(first, second, true), rest: line.slice(match[0].length) };
 };
@@ -60,7 +63,8 @@ export const formatSeconds = (seconds: number): string => {
 
 /** "00:06.1" style timestamp, used in exported cut markers. */
 export const formatTimestamp = (seconds: number): string => {
-  const safe = Math.max(0, seconds);
+  // Round first so 59.96 becomes 01:00.0, not 00:60.0.
+  const safe = Math.round(Math.max(0, seconds) * 10) / 10;
   const minutes = Math.floor(safe / 60);
   const rest = safe - minutes * 60;
   return `${String(minutes).padStart(2, '0')}:${rest.toFixed(1).padStart(4, '0')}`;

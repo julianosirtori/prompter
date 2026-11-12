@@ -21,14 +21,15 @@ export const splitIntoChunks = (speech: string): string[] => {
   tokens.forEach((word, index) => {
     current.push(word);
     const next = tokens[index + 1];
-    const nextFolded = next ? fold(next) : '';
+    // Keep accents: "é" (verb) and "dá" must not match "e" and "da".
+    const nextWord = next ? next.toLowerCase().replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '') : '';
     const size = current.length;
     const shouldBreak =
       next === undefined ||
       size >= MAX_WORDS ||
       (endsPhrase(word) && size >= MIN_WORDS) ||
-      (STRONG_BREAK_BEFORE.has(nextFolded) && size >= MIN_WORDS) ||
-      (WEAK_BREAK_BEFORE.has(nextFolded) && size >= 3);
+      (STRONG_BREAK_BEFORE.has(nextWord) && size >= MIN_WORDS) ||
+      (WEAK_BREAK_BEFORE.has(nextWord) && size >= 3);
     if (shouldBreak) {
       chunks.push(current);
       current = [];

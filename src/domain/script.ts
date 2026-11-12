@@ -1,6 +1,10 @@
-/** Building scripts and the edits the review screen applies to them. All functions are pure. */
+/**
+ * Building scripts and the edits the review screen applies to them. Functions never mutate
+ * their input; they only read the clock and generate ids.
+ */
 import { splitIntoChunks } from './chunking';
-import { estimateDuration } from './pace';
+import { newId } from './ids';
+import { estimateDuration, MIN_BLOCK_SECONDS } from './pace';
 import { extractDirections, fold, slugify, words } from './text';
 import type { TimeSpec } from './time';
 import { blockDuration, type Block, type Script } from './types';
@@ -12,8 +16,6 @@ export interface DraftBlock {
   edit: string;
   extra: string[];
 }
-
-const newId = (): string => crypto.randomUUID();
 
 const round = (seconds: number): number => Math.round(seconds * 100) / 100;
 
@@ -120,7 +122,8 @@ export const renameScript = (script: Script, title: string): Script => ({
 export const setBlockSpeech = (script: Script, blockId: string, text: string): Script =>
   mapBlock(script, blockId, (block) => {
     const { speech, directions } = extractDirections(text);
-    return { ...block, speech, directions: directions.length ? directions : block.directions, chunks: splitIntoChunks(speech) };
+    const merged = [...new Set([...block.directions, ...directions])];
+    return { ...block, speech, directions: merged, chunks: splitIntoChunks(speech) };
   });
 
 export const setBlockEdit = (script: Script, blockId: string, edit: string): Script =>
@@ -141,7 +144,7 @@ export const setBlockChunks = (script: Script, blockId: string, chunks: readonly
 export const setBlockDuration = (script: Script, blockId: string, seconds: number): Script => {
   const index = script.blocks.findIndex((block) => block.id === blockId);
   const target = script.blocks[index];
-  if (!target || seconds <= 0) return script;
+  if (!target || !Number.isFinite(seconds) || seconds <= 0) return script;
   const delta = round(seconds - blockDuration(target));
   return touch(
     script,
@@ -159,7 +162,11 @@ export const applyDurations = (script: Script, durations: readonly number[]): Sc
   return touch(
     script,
     script.blocks.map((block, index) => {
-      const duration = durations[index] ?? blockDuration(block);
+      const proposed = durations[index];
+      const duration =
+        proposed !== undefined && Number.isFinite(proposed)
+          ? Math.max(MIN_BLOCK_SECONDS, proposed)
+          : blockDuration(block);
       const next = { ...block, start: round(cursor), end: round(cursor + duration) };
       cursor += duration;
       return next;
@@ -181,19 +188,22 @@ export const insertBlockAfter = (script: Script, blockId: string): Script => {
   const index = script.blocks.findIndex((block) => block.id === blockId);
   const previous = script.blocks[index];
   if (!previous) return script;
+  const duration = estimateDuration('');
   const block: Block = {
     id: newId(),
     start: previous.end,
-    end: round(previous.end + estimateDuration('')),
+    end: round(previous.end + duration),
     speech: '',
     directions: [],
     edit: '',
     extra: [],
     chunks: [],
   };
-  const blocks = [...script.blocks];
-  blocks.splice(index + 1, 0, block);
-  return makeContiguous(touch(script, blocks));
+  // Only later blocks move, so pauses the user kept elsewhere stay intact.
+  const later = script.blocks
+    .slice(index + 1)
+    .map((next) => ({ ...next, start: round(next.start + duration), end: round(next.end + duration) }));
+  return touch(script, [...script.blocks.slice(0, index + 1), block, ...later]);
 };
 
 /** Turns a block into a silent one; its text becomes the direction. */

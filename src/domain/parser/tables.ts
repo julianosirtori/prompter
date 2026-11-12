@@ -10,6 +10,8 @@ export type Row = string[];
 const VERTICAL = /[│┃║|]/;
 const BOX_BORDER_CHARS = /^[\s┌┬┐├┼┤└┴┘─━═╔╗╚╝╠╣╦╩╬╒╓╕╖╘╙╛╜╞╟╡╢╤╥╧╨╪╫+\-=:|│┃║]+$/;
 const BOX_CHARS = /[┌┬┐├┼┤└┴┘─━═╔╗╚╝╠╣╦╩╬│┃║]/;
+/** ASCII box border: `+----+----+`. */
+const ASCII_BORDER = /^\s*\+[-=+:]+\+\s*$/;
 
 /** A line made only of border characters (`├───┼───┤`, `+---+`, `|---|:--|`). */
 const isBorderLine = (line: string): boolean =>
@@ -25,7 +27,8 @@ export const looksLikeTable = (lines: readonly string[]): boolean => {
   return withVerticals.length >= 2;
 };
 
-export const isBoxTable = (lines: readonly string[]): boolean => lines.some((line) => BOX_CHARS.test(line));
+export const isBoxTable = (lines: readonly string[]): boolean =>
+  lines.some((line) => BOX_CHARS.test(line) || ASCII_BORDER.test(line));
 
 /** Markdown: one line per row, separator line ignored. */
 export const readMarkdownTable = (lines: readonly string[]): Row[] =>
@@ -42,9 +45,9 @@ const mergeLines = (lines: readonly Row[]): Row => {
 };
 
 /**
- * Box tables: consecutive content lines between two borders form one row. When a group has
- * several lines with their own time cell (a table without inner borders), each timed line
- * starts a new row and untimed lines continue it.
+ * Box tables: consecutive content lines between two borders form one row, even when the time
+ * cell itself wraps ("[0:07 –" / "0:12]"). Only when the joined time cell is not a single time
+ * (a table without inner borders) does each timed line start a new row.
  */
 export const readBoxTable = (lines: readonly string[]): Row[] => {
   const groups: Row[][] = [];
@@ -62,8 +65,9 @@ export const readBoxTable = (lines: readonly string[]): Row[] => {
   const timeColumn = findTimeColumn(groups.flat());
   const rows: Row[] = [];
   for (const group of groups) {
-    if (timeColumn === -1) {
-      rows.push(mergeLines(group));
+    const merged = mergeLines(group);
+    if (timeColumn === -1 || parseTimeCell(merged[timeColumn] ?? '') !== null) {
+      rows.push(merged);
       continue;
     }
     let pending: Row[] = [];
