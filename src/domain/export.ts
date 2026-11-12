@@ -37,5 +37,6 @@ export const cutMarkersCsv = (script: Script, take: Take): string => {
       csvField(block?.edit ?? ''),
     ].join(',');
   });
-  return ['bloco,inicio_s,fim_s,fala,edicao', ...rows].join('\n') + '\n';
+  // The BOM makes Excel read the file as UTF-8 (accents in "edição").
+  return '\uFEFF' + ['bloco,inicio_s,fim_s,fala,edicao', ...rows].join('\n') + '\n';
 };

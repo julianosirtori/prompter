@@ -29,18 +29,29 @@ export const extensionFor = (mimeType: string): 'mp4' | 'webm' => (mimeType.incl
 export interface RecordedTake {
   blob: Blob;
   mimeType: string;
+  /** The recorder errored; `blob` holds whatever was captured before the failure. */
+  failed: boolean;
+}
+
+/** Bitrates for a sharp 1080×1920 talking head; browser defaults (~2.5 Mbps) look like a webcam call. */
+const VIDEO_BITS_PER_SECOND = 8_000_000;
+const AUDIO_BITS_PER_SECOND = 128_000;
+
+interface Crop {
+  stream: MediaStream;
+  dispose: () => void;
 }
 
 /**
  * Draws the center 9:16 slice of a landscape video track onto a canvas and returns the canvas
- * stream plus a cleanup function. The original audio tracks are added untouched.
+ * stream plus a cleanup function. The original audio tracks are added untouched. Resolves once
+ * the first frame is painted, so the recording never starts on black frames.
  */
-const cropToPortrait = (source: MediaStream): { stream: MediaStream; dispose: () => void } => {
+const cropToPortrait = async (source: MediaStream): Promise<Crop> => {
   const video = document.createElement('video');
   video.srcObject = source;
   video.muted = true;
   video.playsInline = true;
-  void video.play();
 
   const canvas = document.createElement('canvas');
   canvas.height = OUTPUT_HEIGHT;
@@ -48,6 +59,20 @@ const cropToPortrait = (source: MediaStream): { stream: MediaStream; dispose: ()
   const context = canvas.getContext('2d');
 
   let frame = 0;
+  const stream = canvas.captureStream(FRAME_RATE);
+  const dispose = () => {
+    cancelAnimationFrame(frame);
+    stream.getVideoTracks().forEach((track) => track.stop());
+    video.srcObject = null;
+  };
+
+  try {
+    await video.play();
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+
   const draw = () => {
     if (context && video.videoWidth > 0) {
       const sourceWidth = video.videoHeight * PORTRAIT_RATIO;
@@ -59,16 +84,8 @@ const cropToPortrait = (source: MediaStream): { stream: MediaStream; dispose: ()
   };
   draw();
 
-  const stream = canvas.captureStream(FRAME_RATE);
   source.getAudioTracks().forEach((track) => stream.addTrack(track));
-  return {
-    stream,
-    dispose: () => {
-      cancelAnimationFrame(frame);
-      stream.getVideoTracks().forEach((track) => track.stop());
-      video.srcObject = null;
-    },
-  };
+  return { stream, dispose };
 };
 
 const isLandscape = (stream: MediaStream): boolean => {
@@ -76,10 +93,14 @@ const isLandscape = (stream: MediaStream): boolean => {
   return Boolean(settings?.width && settings.height && settings.width > settings.height);
 };
 
+/**
+ * One take. Usage: `await recorder.start()` (resolves when the recorder is really recording),
+ * then start the prompter, then `await recorder.stop()`.
+ */
 export class TakeRecorder {
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
-  private disposeCrop: (() => void) | null = null;
+  private crop: Crop | null = null;
   private stopped: Promise<RecordedTake> | null = null;
   private readonly source: MediaStream;
 
@@ -87,30 +108,43 @@ export class TakeRecorder {
     this.source = source;
   }
 
-  start(): void {
+  async start(): Promise<void> {
+    if (this.recorder) throw new Error('recorder already started');
     const mimeType = pickMimeType();
-    let stream = this.source;
-    if (isLandscape(this.source)) {
-      const crop = cropToPortrait(this.source);
-      stream = crop.stream;
-      this.disposeCrop = crop.dispose;
+    try {
+      this.crop = isLandscape(this.source) ? await cropToPortrait(this.source) : null;
+      const recorder = new MediaRecorder(this.crop?.stream ?? this.source, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+        audioBitsPerSecond: AUDIO_BITS_PER_SECOND,
+      });
+      this.chunks = [];
+      let failed = false;
+      this.stopped = new Promise((resolve) => {
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) this.chunks.push(event.data);
+        };
+        // An error stops the recorder; `onstop` then resolves with the partial take.
+        recorder.onerror = () => {
+          failed = true;
+        };
+        recorder.onstop = () => {
+          const type = recorder.mimeType || mimeType || 'video/mp4';
+          resolve({ blob: new Blob(this.chunks, { type }), mimeType: type, failed });
+        };
+      });
+      const started = new Promise<void>((resolve) => {
+        recorder.onstart = () => resolve();
+      });
+      // The timeslice hands data over every second instead of only at the end. Chunks stay in
+      // memory, so a crash of the page still loses the take.
+      recorder.start(1000);
+      this.recorder = recorder;
+      await started;
+    } catch (error) {
+      this.release();
+      throw error;
     }
-
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    this.chunks = [];
-    this.stopped = new Promise((resolve, reject) => {
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) this.chunks.push(event.data);
-      };
-      recorder.onstop = () => {
-        const type = recorder.mimeType || mimeType || 'video/mp4';
-        resolve({ blob: new Blob(this.chunks, { type }), mimeType: type });
-      };
-      recorder.onerror = (event) => reject(event instanceof ErrorEvent ? event.error : new Error('recording failed'));
-    });
-    // A timeslice keeps data flowing, so a crash loses at most one second.
-    recorder.start(1000);
-    this.recorder = recorder;
   }
 
   async stop(): Promise<RecordedTake> {
@@ -119,13 +153,23 @@ export class TakeRecorder {
     try {
       return await this.stopped;
     } finally {
-      this.disposeCrop?.();
-      this.disposeCrop = null;
-      this.recorder = null;
+      this.release();
     }
+  }
+
+  /** Frees the crop pipeline without saving anything (e.g. leaving the screen mid-take). */
+  discard(): void {
+    if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
+    this.release();
   }
 
   get isRecording(): boolean {
     return this.recorder?.state === 'recording';
+  }
+
+  private release(): void {
+    this.crop?.dispose();
+    this.crop = null;
+    this.recorder = null;
   }
 }

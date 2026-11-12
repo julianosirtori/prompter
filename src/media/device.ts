@@ -1,13 +1,30 @@
 /** Browser features the recording screen needs: wake lock, fullscreen, sharing files. */
 
-/** Keeps the screen on while a take runs. Returns a release function; failures are silent. */
+/**
+ * Keeps the screen on until the returned function is called. The browser drops the lock
+ * whenever the page is hidden, so it is requested again each time the page comes back.
+ * Failures are silent (iOS before 18.4 ignores it inside an installed PWA).
+ */
 export const keepScreenOn = async (): Promise<() => void> => {
-  try {
-    const sentinel = await navigator.wakeLock?.request('screen');
-    return () => void sentinel?.release();
-  } catch {
-    return () => undefined;
-  }
+  let sentinel: WakeLockSentinel | undefined;
+  let released = false;
+  const acquire = async () => {
+    try {
+      sentinel = await navigator.wakeLock?.request('screen');
+    } catch {
+      sentinel = undefined;
+    }
+  };
+  const onVisibility = () => {
+    if (!released && document.visibilityState === 'visible') void acquire();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  await acquire();
+  return () => {
+    released = true;
+    document.removeEventListener('visibilitychange', onVisibility);
+    void sentinel?.release().catch(() => undefined);
+  };
 };
 
 export const isIOS = (): boolean =>

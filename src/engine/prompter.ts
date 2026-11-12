@@ -3,9 +3,10 @@
  *
  *   ready → countdown → running ⇄ (holding) → tail → finished
  *
- * The take clock (`elapsed`) starts at the countdown, which is also when recording starts, so
- * block marks line up with the video file. In "timed" mode a script clock advances at `speed`
- * and decides the chunk; hold/advance/back adjust it. In "manual" mode only advance/back move.
+ * The take clock (`elapsed`) starts at the countdown. Start the prompter only once the recorder
+ * reports it is really recording (`await recorder.start()`), so block marks line up with the
+ * video file. In "timed" mode a script clock advances at `speed` and decides the chunk;
+ * hold/advance/back adjust it. In "manual" mode only advance/back move.
  *
  * Framework-agnostic: React reads it through `subscribe` + `getSnapshot`.
  */
@@ -53,15 +54,21 @@ export interface PrompterSnapshot {
   blockNumber: number;
   blockCount: number;
   holding: boolean;
-  /** Seconds since recording started. */
+  /** Seconds since recording started; frozen once finished. */
   elapsed: number;
   /** Seconds behind (+) or ahead (−) of the script. */
   drift: number;
-  /** Set when the take ends: time each block was on screen. */
+  /** Last pass of each block shown so far, ordered by block. */
   marks: BlockMark[];
   /** True when stopped before the last block finished. */
   incomplete: boolean;
 }
+
+/**
+ * A frame longer than this (tab hidden, screen off) advances the script clock by this much only,
+ * so the text never jumps over whole blocks.
+ */
+const MAX_FRAME_SECONDS = 0.25;
 
 const browserClock: Clock = {
   now: () => performance.now(),
@@ -71,6 +78,7 @@ const browserClock: Clock = {
 
 export class Prompter {
   private readonly timeline: Timeline;
+  private readonly blockDurations = new Map<number, number>();
   private readonly mode: AdvanceMode;
   private readonly speed: number;
   private readonly countdownSeconds: number;
@@ -83,24 +91,33 @@ export class Prompter {
   /** Take time when the blocks started (end of countdown). */
   private blocksStartedAt = 0;
   private tailStartedAt = 0;
+  private finishedElapsed: number | null = null;
   /** Script clock in seconds from the range start; advanced on each frame in timed mode. */
   private scriptTime = 0;
   private lastFrameAt = 0;
-  private itemIndex = 0;
+  private itemIndex = -1;
   private holding = false;
   private incomplete = false;
   private frame: number | null = null;
-  private readonly marks = new Map<number, BlockMark>();
+  /**
+   * Latest pass through each block. Going back and forward again replaces a block's pass, so
+   * marks never overlap and the exported cut is the take the speaker finished with.
+   */
+  private readonly passes = new Map<number, BlockMark>();
+  private marksCache: BlockMark[] = [];
   private snapshot: PrompterSnapshot;
 
   constructor(options: PrompterOptions) {
     this.timeline = buildTimeline(options.blocks, options.range);
+    for (const item of this.timeline.items) {
+      this.blockDurations.set(item.blockIndex, (this.blockDurations.get(item.blockIndex) ?? 0) + item.duration);
+    }
     this.mode = options.mode;
     this.speed = options.speed ?? 1;
     this.countdownSeconds = options.countdownSeconds ?? 3;
     this.tailSeconds = options.tailSeconds ?? 1.5;
     this.clock = options.clock ?? browserClock;
-    this.snapshot = this.computeSnapshot();
+    this.snapshot = this.computeSnapshot(0);
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -134,18 +151,28 @@ export class Prompter {
     this.goTo(Math.max(0, this.itemIndex - 1));
   }
 
-  /** Freezes the current chunk while held (timed mode). */
+  /** Freezes the current chunk while held (timed mode, while running). */
   setHolding(holding: boolean): void {
     if (this.holding === holding || this.mode !== 'timed') return;
+    if (holding && this.phase !== 'running') return;
     this.holding = holding;
-    this.emit();
+    if (this.phase !== 'finished') this.emit();
   }
 
-  /** Stops early. Marks keep the blocks already shown. */
+  /** Stops early. Marks keep the blocks already shown; the current one is flagged interrupted. */
   stop(): void {
     if (this.phase === 'finished' || this.phase === 'ready') return;
-    this.incomplete = this.phase !== 'tail';
-    this.finish(this.elapsedNow());
+    const elapsed = this.elapsedNow();
+    if (this.phase !== 'tail') {
+      this.incomplete = true;
+      const current = this.timeline.items[this.itemIndex];
+      const pass = current ? this.passes.get(current.blockIndex) : undefined;
+      if (pass && this.phase === 'running') {
+        pass.end = elapsed;
+        pass.interrupted = true;
+      }
+    }
+    this.finish(elapsed);
   }
 
   dispose(): void {
@@ -160,12 +187,12 @@ export class Prompter {
   };
 
   private elapsedNow(): number {
-    return (this.clock.now() - this.startedAt) / 1000;
+    return this.finishedElapsed ?? (this.clock.now() - this.startedAt) / 1000;
   }
 
   private tick(): void {
     const now = this.clock.now();
-    const frameSeconds = (now - this.lastFrameAt) / 1000;
+    const frameSeconds = Math.min(MAX_FRAME_SECONDS, (now - this.lastFrameAt) / 1000);
     this.lastFrameAt = now;
     const elapsed = (now - this.startedAt) / 1000;
 
@@ -180,7 +207,7 @@ export class Prompter {
       this.finish(elapsed);
       return;
     }
-    this.emit();
+    this.emit(elapsed);
   }
 
   private enterBlocks(elapsed: number): void {
@@ -198,40 +225,39 @@ export class Prompter {
       this.setItem(index, elapsed);
       this.scriptTime = this.timeline.items[index]?.start ?? this.scriptTime;
     }
-    this.emit();
+    this.emit(elapsed);
   }
 
-  /** Moves to an item and records block boundaries for the cut markers. */
+  /** Moves to an item; entering a different block closes the previous pass and opens a new one. */
   private setItem(index: number, elapsed: number): void {
     if (index === this.itemIndex) return;
     const previous = this.timeline.items[this.itemIndex];
     const item = this.timeline.items[index];
     this.itemIndex = index;
     if (!item || previous?.blockIndex === item.blockIndex) return;
-    if (previous) this.closeMark(previous.blockIndex, elapsed);
-    // Going back into a block keeps its first start; going forward opens a new mark.
-    const existing = this.marks.get(item.blockIndex);
-    this.marks.set(item.blockIndex, { blockIndex: item.blockIndex, start: existing?.start ?? elapsed, end: elapsed });
+    if (previous) this.closePass(previous.blockIndex, elapsed);
+    this.passes.set(item.blockIndex, { blockIndex: item.blockIndex, start: elapsed, end: elapsed });
+    this.marksCache = [];
   }
 
-  private closeMark(blockIndex: number, elapsed: number): void {
-    const mark = this.marks.get(blockIndex);
-    if (mark) mark.end = elapsed;
+  private closePass(blockIndex: number, elapsed: number): void {
+    const pass = this.passes.get(blockIndex);
+    if (pass) pass.end = elapsed;
+    this.marksCache = [];
   }
 
   private enterTail(elapsed: number): void {
     const last = this.timeline.items[this.itemIndex];
-    if (last) this.closeMark(last.blockIndex, elapsed);
+    if (last) this.closePass(last.blockIndex, elapsed);
     this.phase = 'tail';
     this.tailStartedAt = elapsed;
   }
 
   private finish(elapsed: number): void {
-    if (this.phase === 'running') {
-      const current = this.timeline.items[this.itemIndex];
-      if (current) this.closeMark(current.blockIndex, elapsed);
-    }
     this.phase = 'finished';
+    this.holding = false;
+    this.finishedElapsed = elapsed;
+    this.marksCache = [];
     if (this.frame !== null) this.clock.cancelFrame(this.frame);
     this.frame = null;
     this.emit(elapsed);
@@ -242,23 +268,30 @@ export class Prompter {
     this.listeners.forEach((listener) => listener());
   }
 
-  private computeSnapshot(elapsed = 0): PrompterSnapshot {
+  private marks(): BlockMark[] {
+    if (this.marksCache.length !== this.passes.size) {
+      this.marksCache = [...this.passes.values()]
+        .sort((a, b) => a.blockIndex - b.blockIndex)
+        .map((pass) => ({ ...pass }));
+    }
+    return this.marksCache;
+  }
+
+  private computeSnapshot(elapsed: number): PrompterSnapshot {
     const { items } = this.timeline;
     const showing = this.phase === 'running' || this.phase === 'ready' || this.phase === 'countdown';
     const index = Math.max(0, this.itemIndex);
     const current = showing ? (items[index] ?? null) : null;
     const next = showing ? (items[index + 1] ?? null) : null;
     const blockIndex = current?.blockIndex ?? this.timeline.lastBlock;
-    const blockStart = this.timeline.blockStarts.get(blockIndex) ?? 0;
-    const block = items.filter((item) => item.blockIndex === blockIndex);
-    const blockDuration = block.reduce((sum, item) => sum + item.duration, 0);
+    const blockDuration = this.blockDurations.get(blockIndex) ?? 0;
 
     let blockProgress = 0;
     if (this.phase === 'running' && blockDuration > 0) {
       const position =
         this.mode === 'timed'
-          ? this.scriptTime - blockStart
-          : (elapsed - (this.marks.get(blockIndex)?.start ?? elapsed)) * this.speed;
+          ? this.scriptTime - (this.timeline.blockStarts.get(blockIndex) ?? 0)
+          : elapsed - (this.passes.get(blockIndex)?.start ?? elapsed);
       blockProgress = Math.min(1, Math.max(0, position / blockDuration));
     } else if (this.phase === 'tail' || this.phase === 'finished') {
       blockProgress = 1;
@@ -279,7 +312,7 @@ export class Prompter {
       holding: this.holding,
       elapsed,
       drift,
-      marks: [...this.marks.values()].sort((a, b) => a.blockIndex - b.blockIndex).map((mark) => ({ ...mark })),
+      marks: this.marks(),
       incomplete: this.incomplete,
     };
   }

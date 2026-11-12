@@ -32,6 +32,8 @@ export interface BlockMark {
   blockIndex: number;
   start: number;
   end: number;
+  /** The take was stopped while this block was on screen, so its length says nothing about pace. */
+  interrupted?: boolean;
 }
 
 export interface BlockRange {

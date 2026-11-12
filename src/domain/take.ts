@@ -56,10 +56,11 @@ export interface BlockPace {
 
 const OFF_PACE_SECONDS = 0.5;
 
+/** Pace of each block in a take; a block cut short by "Parar" is left out. */
 export const blockPaces = (blocks: readonly Block[], marks: readonly BlockMark[]): BlockPace[] =>
   marks.flatMap((mark) => {
     const block = blocks[mark.blockIndex];
-    if (!block) return [];
+    if (!block || mark.interrupted) return [];
     const scripted = blockDuration(block);
     const actual = mark.end - mark.start;
     const difference = actual - scripted;
