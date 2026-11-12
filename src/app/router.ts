@@ -57,6 +57,12 @@ const previousHash = (): string | undefined => (window.history.state as EntrySta
 
 const listeners = new Set<() => void>();
 
+/** `history.back()` is async: a double tap on "Voltar" must not pop two entries. */
+let backPending = false;
+window.addEventListener('popstate', () => {
+  backPending = false;
+});
+
 const subscribe = (listener: () => void): (() => void) => {
   listeners.add(listener);
   window.addEventListener('popstate', listener);
@@ -97,8 +103,12 @@ export const navigate = (route: Route, options: { replace?: boolean } = {}): voi
  * are fine to return to (a session opened from the takes screen goes back to it).
  */
 export const goBack = (fallback: Route, alsoAccept?: (previous: Route) => boolean): void => {
+  if (backPending) return;
   const previous = previousHash();
   const accepted = previous !== undefined && (previous === routeToHash(fallback) || alsoAccept?.(parseHash(previous)) === true);
-  if (accepted) window.history.back();
+  if (accepted) {
+    backPending = true;
+    window.history.back();
+  }
   else navigate(fallback, { replace: true });
 };

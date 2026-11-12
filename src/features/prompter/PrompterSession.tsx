@@ -81,6 +81,25 @@ export function PrompterSession({
   const alive = useRef(true);
 
   const finalizer = useTakeFinalizer(mode, script, range);
+
+  // Declared before useCamera on purpose: React runs unmount cleanups in declaration order, so
+  // the recorder stops before the camera tracks do (Safari may fail a take whose tracks end first).
+  // Leaving the screen mid-take (Android back, iOS edge swipe) closes the take and keeps it,
+  // exactly like the app going to the background. Before the take starts there is nothing to keep.
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      const current = prompter.getSnapshot().phase;
+      if (current === 'ready') {
+        finalizer.abandon();
+        return;
+      }
+      prompter.stop();
+      void finalizer.finalize(prompter.getSnapshot());
+    };
+  }, [prompter, finalizer]);
+
   const cameraRequest = useMemo(
     () => ({ facing: settings.facing, videoDeviceId: settings.videoDeviceId, audioDeviceId: settings.audioDeviceId }),
     [settings.facing, settings.videoDeviceId, settings.audioDeviceId],
@@ -109,6 +128,15 @@ export function PrompterSession({
       if (!alive.current) return;
       if (!recording) {
         setOutcome({ kind: 'failed' });
+        return;
+      }
+      // The camera may have died or the app gone to the background while the recorder started;
+      // the stop effects only watch running takes, so check here instead of reading to a dead camera.
+      const cameraEnded = stream.getVideoTracks().some((track) => track.readyState === 'ended');
+      if (cameraEnded || document.hidden) {
+        finalizer.abandon();
+        startingRef.current = false;
+        setStarting(false);
         return;
       }
       setStarting(false);
@@ -155,22 +183,6 @@ export function PrompterSession({
   const gestures = useGestures(gestureHandlers);
   useSilentAutoAdvance(prompter, settings.advance === 'manual');
   useWakeLock(active && phase !== 'finished');
-
-  // Leaving the screen mid-take (Android back, iOS edge swipe) closes the take and keeps it,
-  // exactly like the app going to the background. Before the take starts there is nothing to keep.
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-      const current = prompter.getSnapshot().phase;
-      if (current === 'ready') {
-        finalizer.abandon();
-        return;
-      }
-      prompter.stop();
-      void finalizer.finalize(prompter.getSnapshot());
-    };
-  }, [prompter, finalizer]);
 
   // iOS suspends the camera when the app leaves the screen: close the take with what was recorded.
   useEffect(() => {

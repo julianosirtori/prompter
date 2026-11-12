@@ -10,6 +10,8 @@ interface TakePlayerProps {
 
 type VideoEvent = SyntheticEvent<HTMLVideoElement>;
 
+const FIX_TIMEOUT_MS = 2000;
+
 export function TakePlayer({ video, videoRef, prompterOnly, onTime }: TakePlayerProps) {
   /**
    * MediaRecorder files often report an infinite duration, which makes seeking fail. Seeking far
@@ -23,6 +25,14 @@ export function TakePlayer({ video, videoRef, prompterOnly, onTime }: TakePlayer
     if (Number.isFinite(player.duration)) return;
     fixing.current = true;
     player.currentTime = Number.MAX_SAFE_INTEGER;
+    // A broken file may never get a finite duration; stop hiding the position after a moment.
+    window.setTimeout(() => {
+      fixing.current = false;
+    }, FIX_TIMEOUT_MS);
+  };
+
+  const abortFix = () => {
+    fixing.current = false;
   };
 
   const endFix = (event: VideoEvent) => {
@@ -52,6 +62,7 @@ export function TakePlayer({ video, videoRef, prompterOnly, onTime }: TakePlayer
           onDurationChange={endFix}
           onTimeUpdate={report}
           onSeeked={report}
+          onError={abortFix}
         />
       ) : (
         <p className="player__empty">

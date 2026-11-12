@@ -57,6 +57,11 @@ export const useTakes = (scriptId: string): TakesState => {
         stored.current.set(take.id, take);
       })
       .catch(() => {
+        // A newer write is queued: it will settle the screen, so do not roll back over it.
+        if (queue.current.get(take.id) !== write) {
+          setError('Não consegui salvar a alteração neste take. Tente de novo.');
+          return;
+        }
         const good = stored.current.get(take.id);
         if (good) setState((current) => current && { ...current, takes: replaceTake(current.takes, good) });
         setError('Não consegui salvar a alteração neste take. Tente de novo.');
@@ -68,6 +73,9 @@ export const useTakes = (scriptId: string): TakesState => {
     setError(null);
     setRemoving(takeId);
     try {
+      // Let pending edits land first, or a late `put` would bring the take back without its video.
+      await queue.current.get(takeId)?.catch(() => undefined);
+      queue.current.delete(takeId);
       await deleteTake(takeId);
       stored.current.delete(takeId);
       setState((current) => current && { ...current, takes: current.takes.filter((take) => take.id !== takeId) });
