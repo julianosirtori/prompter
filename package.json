@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "typecheck": "tsc -b",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "preview:phone": "vite build --mode phone && vite preview --mode phone"
   },
   "dependencies": {
     "react": "^19.3.1",

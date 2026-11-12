@@ -20,6 +20,14 @@ aceite o aviso de certificado. O navegador só libera a câmera em HTTPS.
 
 Outros comandos: `npm run build`, `npm run preview`, `npm run typecheck`, `npm run lint`.
 
+### Testar o app instalado e offline
+
+O service worker só é registrado no build de produção (`npm run preview`, ou
+`npm run preview:phone` para abrir no celular por HTTPS). Com o certificado autoassinado do modo
+celular o navegador costuma recusar o service worker, então para testar a instalação e o modo
+offline no iPhone use um certificado confiável (ex.: `mkcert` com a CA instalada no aparelho) ou
+publique o `dist/` numa hospedagem com HTTPS.
+
 ## Estrutura
 
 ```
