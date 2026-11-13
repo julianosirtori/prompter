@@ -28,6 +28,27 @@ celular o navegador costuma recusar o service worker, então para testar a insta
 offline no iPhone use um certificado confiável (ex.: `mkcert` com a CA instalada no aparelho) ou
 publique o `dist/` numa hospedagem com HTTPS.
 
+## Formato do roteiro
+
+```text
+| Tempo  | Você fala                                                  | O que eu ponho na edição |
+|--------|------------------------------------------------------------|--------------------------|
+| 0–7s   | Fisio autônomo: onde tá a ficha do paciente de ontem?      | Legenda grande           |
+| 7–14s  | Se foi num caderno, esse vídeo é pra você. (aponta)        | Corte seco               |
+```
+
+- **Tempo**: o prompter segue o tempo de cada bloco à risca. Aceita intervalos (`0–3s`,
+  `0:00–0:03`, `0 a 3s`), início (`0:03`) ou duração (`3s`, ou valores numa coluna chamada
+  "Duração"). Sem coluna de tempo, a duração é estimada pelo texto (~155 palavras por minuto).
+  Blocos acima de 3,5 palavras por segundo aparecem como "Apertado" na revisão.
+- **Fala**: o texto que rola na tela. Trechos entre `(parênteses)` ou `[colchetes]` viram
+  marcações de direção e não entram na fala.
+- **Edição**: nota do bloco. Uma linha só com tempo ou só com nota de edição vira um bloco
+  silencioso (B-roll).
+- **Texto simples** também funciona: uma frase por linha, com tempo opcional no começo
+  (`0–3s Fisio autônomo...`) e nota depois de `— Edição:`. O primeiro `# título` vira o nome do
+  roteiro.
+
 ## Estrutura
 
 ```
@@ -36,10 +57,10 @@ src/
   engine/    Prompter: máquina de estados que decide o trecho na tela e marca os blocos
   media/     câmera, gravação (MediaRecorder, corte 9:16), wake lock, salvar arquivo
   storage/   roteiros e configurações (localStorage), takes e vídeos (IndexedDB)
-  app/       rotas por hash, hooks de dados, service worker
+  app/       rotas por hash, hooks de dados, registro do service worker
+  pwa/sw.js  service worker offline (o build carimba a lista de arquivos e a versão do cache)
   features/  telas: paste, review, session, prompter, takes
   ui/        componentes básicos e estilos
-public/sw.js  offline (o build carimba a versão do cache)
 ```
 
 As camadas só dependem para dentro: `features → app/engine/media/storage → domain`.
