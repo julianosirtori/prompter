@@ -66,3 +66,7 @@ src/
 ```
 
 As camadas só dependem para dentro: `features → app/engine/media/storage → domain`.
+
+## Licença
+
+[MIT](LICENSE)
