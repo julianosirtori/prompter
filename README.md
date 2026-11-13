@@ -5,6 +5,8 @@ olhando para a lente. Cole o roteiro que a IA gerou (tabela markdown, tabela com
 simples), revise os blocos, ensaie e grave no celular ou no computador. O vídeo sai em 9:16 e
 os takes ficam só no aparelho.
 
+**Usar agora:** https://prompter.julianosirtori.dev (instale como app pelo navegador para usar offline).
+
 Produto e pesquisa: [`docs/produto.md`](docs/produto.md) · [`docs/benchmark.md`](docs/benchmark.md).
 
 ## Rodar
